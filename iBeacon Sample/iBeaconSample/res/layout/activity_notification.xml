@@ -8,20 +8,16 @@
     android:paddingTop="@dimen/activity_vertical_margin"
     android:background="@android:color/transparent"
     tools:context=".ActivityNotification" >
-
-    <TextView
-        android:id="@+id/tvMsg"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_centerInParent="true"
-        android:text="Message from iBeacon Sample: \n" />
-
-    <ImageView
-        android:id="@+id/btnDrawer"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_above="@+id/tvMsg"
-        android:layout_centerHorizontal="true"
-        android:src="@drawable/ic_launcher" />
-
+	        	
+	    <TextView
+	        android:id="@+id/tvMsg"
+	        android:layout_width="wrap_content"
+	        android:layout_height="wrap_content"
+	        android:layout_marginTop="10dp"
+	        android:layout_marginLeft="20dp"
+			android:layout_marginRight="20dp"
+			android:layout_marginBottom="20dp"
+			android:textSize="18sp"
+	        android:text="Message\n" />
+	  
 </RelativeLayout>

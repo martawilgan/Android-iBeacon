@@ -1,0 +1,320 @@
+package com.sample.iBeacon;
+
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import android.app.ActivityManager;
+import android.app.ActivityManager.RunningAppProcessInfo;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.app.TaskStackBuilder;
+import android.content.Context;
+import android.content.Intent;
+import android.os.IBinder;
+import android.os.RemoteException;
+import android.support.v4.app.NotificationCompat;
+import android.util.Log;
+
+import com.radiusnetworks.ibeacon.IBeacon;
+import com.radiusnetworks.ibeacon.IBeaconConsumer;
+import com.radiusnetworks.ibeacon.IBeaconManager;
+import com.radiusnetworks.ibeacon.MonitorNotifier;
+import com.radiusnetworks.ibeacon.RangeNotifier;
+import com.radiusnetworks.ibeacon.Region;
+
+public class BeaconService extends Service implements IBeaconConsumer{
+	
+	private static final String TAG = BeaconService.class.getSimpleName();
+    private IBeaconManager iBeaconManager = IBeaconManager.getInstanceForApplication(this);
+    private Region beaconRegion;
+    
+    private IBeacon currentClosest;
+    private int requiredValidations = 3;
+    
+    public static final int NOTIFICATION_ID = 1;
+	private NotificationManager mNotificationManager;
+	
+	private Map<Integer, BeaconState> beaconsMap = new HashMap<Integer, BeaconState>();{
+		beaconsMap.put(4156, new BeaconState());
+		beaconsMap.put(4152, new BeaconState());
+	}
+   
+	@Override
+	public IBinder onBind(Intent intent) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+ 
+	@Override
+	public void onCreate() {
+		super.onCreate();
+		Log.i(TAG, "Service creating");
+		
+		// Define the region of beacons
+		String regionUUID = getString(R.string.uuid_roximity);
+		beaconRegion = new Region("com.sample.iBeacon.region.beacons", regionUUID, null, null);
+		iBeaconManager.bind(this);
+	}
+ 
+	@Override
+	public void onDestroy() {
+		super.onDestroy();
+		Log.i(TAG, "Service destroying");
+		
+		iBeaconManager.unBind(this);
+	}
+
+	@Override
+	public void onIBeaconServiceConnect() {
+		Log.i(TAG, "On iBeacon Service Connect");
+		checkBluetooth();
+		iBeaconManager.setMonitorNotifier(new RegionMonitorNotifier());
+		iBeaconManager.setRangeNotifier(new BeaconRangeNotifier());
+        startMonitoring();
+	}
+	
+	private void checkBluetooth(){
+		// Disable service if no bluetooth
+		try {
+			if (!IBeaconManager.getInstanceForApplication(this).checkAvailability()){
+				Log.i(TAG, "Bluetooth OFF. Service destroyed.");
+				onDestroy();
+			}
+		}catch (RuntimeException e){
+			Log.i(TAG, "Bluetooth UNAVAILABLE. Service destroyed.");
+			onDestroy();
+		}
+	}
+	
+	private void startMonitoring(){
+		try{
+            iBeaconManager.startMonitoringBeaconsInRegion(beaconRegion);
+        }catch(RemoteException e){   
+        	e.printStackTrace();
+        }
+	}
+	
+	/*private void stopMonitoring(){
+		try{
+            iBeaconManager.stopMonitoringBeaconsInRegion(beaconRegion);
+        }catch(RemoteException e){   
+        	e.printStackTrace();
+        }
+	}*/
+	
+	private void startRanging(){
+		try{
+            iBeaconManager.startRangingBeaconsInRegion(beaconRegion);
+        }catch (RemoteException e){   
+        	e.printStackTrace();
+        }
+	}
+	
+	private void stopRanging(){
+		try{
+            iBeaconManager.stopRangingBeaconsInRegion(beaconRegion);
+        }catch (RemoteException e){   
+        	e.printStackTrace();
+        }
+	}
+	
+	private class RegionMonitorNotifier implements MonitorNotifier{
+		@Override
+		public void didEnterRegion(Region region) {
+			Log.i(TAG, "I just saw an iBeacon for the firt time!");
+			startRanging();
+		}
+
+		@Override
+		public void didExitRegion(Region region) {
+			Log.i(TAG, "I no longer see an iBeacon");
+			stopRanging();
+		}
+
+		@Override
+		public void didDetermineStateForRegion(int state, Region region) {
+			Log.i(TAG, "I have just switched from seeing/not seeing iBeacons: " + state);  
+			if(state == MonitorNotifier.INSIDE){
+				startRanging();
+			}
+		}
+	}
+	
+	private class BeaconRangeNotifier implements RangeNotifier{
+        @Override 
+        public void didRangeBeaconsInRegion(Collection<IBeacon> iBeacons, Region region){
+        	
+            if (iBeacons.size() > 0){
+            	
+            	IBeacon tempClosest = findTempClosest(iBeacons);
+            	
+            	if(tempClosest != null){
+	            	Log.i(TAG, "iBeacons size " + iBeacons.size()
+	        				+ " beacon minor " + tempClosest.getMinor());
+	                String message = "iBeacon " +  tempClosest.getMinor() 
+                		+ " is " + tempClosest.getAccuracy() + " meters away.";
+	            	Log.i(TAG, message);
+	            	Log.i(TAG, "RSSI " + tempClosest.getRssi());
+	            	
+	            	if(updateClosestBeaconState(tempClosest)){
+	            		
+	            		if(getProcessImportance() == RunningAppProcessInfo.IMPORTANCE_FOREGROUND){
+	            			showAlert(message);
+	            		}else{
+	            			sendNotification(message);
+	            		}
+	            	}
+            	}
+        	}
+        }
+    }
+	
+	// Find closest beacon in Collection of iBeacons
+	private IBeacon findTempClosest(Collection<IBeacon> iBeacons){
+		
+		IBeacon closestBeacon = null;
+		int closestRSSI = -100000;
+		
+		for(IBeacon currentBeacon : iBeacons){
+			
+			int currentRSSI = currentBeacon.getRssi();
+			
+			if(currentRSSI < 0 &&
+				currentRSSI > closestRSSI){
+				closestRSSI = currentRSSI;
+				closestBeacon = currentBeacon;
+			}
+		}
+		return closestBeacon;
+	}
+	
+	// Updates beacon state and validations
+	// Returns true if closest beacon has been validated,
+	// false otherwise
+	private boolean updateClosestBeaconState(IBeacon tempClosest){
+		
+		if(currentClosest != null){
+			Log.i(TAG, "Closest Beacon: " + currentClosest.getMinor());
+		}
+		Log.i(TAG, "Temp Closest: " + tempClosest.getMinor());
+		
+		// Return if tempClosest has already been validated previously
+		if(currentClosest != null && currentClosest.equals(tempClosest)){
+			return false;
+		}
+		
+		// Update beacon state info for predefined beacons when proximity is known
+    	if(tempClosest.getProximity() != IBeacon.PROXIMITY_UNKNOWN
+			&& beaconsMap.containsKey(tempClosest.getMinor())){
+    		
+        	BeaconState tempState = beaconsMap.get(tempClosest.getMinor());
+        	
+        	// Update the validations and proximity if necessary 
+        	if(tempState.proximity == tempClosest.getProximity()){
+        		tempState.validations++;
+        	}else{
+        		tempState.proximity = tempClosest.getProximity();
+        		tempState.validations = 1;
+        	}
+        	
+        	// Update current closest beacon if necessary
+        	if(tempState.validations >= requiredValidations
+    			&& (currentClosest == null 
+    			|| !currentClosest.equals(tempClosest)) ){
+        		currentClosest = tempClosest;
+        		resetProximityValidations();
+        		return true;
+        	}
+    	}
+		
+		return false;
+	}
+	
+	private void resetProximityValidations(){
+		
+		for (Map.Entry<Integer, BeaconState> entry : beaconsMap.entrySet()){
+			
+			System.out.println("Before map RESET" + entry.getKey() 
+		    		+ "/" + entry.getValue().validations);
+			
+			BeaconState beaconState = entry.getValue();
+			beaconState.validations = 0;
+			beaconsMap.put(entry.getKey(), beaconState);
+			
+		    System.out.println("After map RESET" + entry.getKey() 
+	    		+ "/" + entry.getValue().validations);
+		}
+		
+	}
+	
+	private void sendNotification(String msg) {
+
+		Intent notificationIntent = new Intent(getApplicationContext(),
+			ActivityHome.class);
+		notificationIntent.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+		
+		// Save back stack of ActivityHome to preserve navigation
+		TaskStackBuilder stackBuilder = TaskStackBuilder.create(getApplicationContext());
+		stackBuilder.addParentStack(ActivityHome.class);
+		stackBuilder.addNextIntent(notificationIntent);
+		
+		PendingIntent contentIntent = 
+			stackBuilder.getPendingIntent(0, PendingIntent.FLAG_CANCEL_CURRENT);
+
+		NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(
+			this).setSmallIcon(R.drawable.ic_notif)
+			.setContentTitle("iBeacon Sample")
+			.setContentText(msg)
+			.setStyle(new NotificationCompat.BigTextStyle().bigText(msg))
+			.setAutoCancel(true);
+		mBuilder.setContentIntent(contentIntent);
+		
+		mNotificationManager = (NotificationManager) getApplicationContext()
+				.getSystemService(Context.NOTIFICATION_SERVICE);
+		mNotificationManager.notify(NOTIFICATION_ID, mBuilder.build());
+	}
+	
+	private void showAlert(String msg){
+		Intent alertIntent = new Intent(getBaseContext(),
+			ActivityNotification.class);
+		alertIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+		alertIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+		alertIntent.putExtra("m", msg);
+		getApplication().startActivity(alertIntent);
+		
+	}
+	
+	public int getProcessImportance(){
+		
+		ActivityManager activityManager = 
+			(ActivityManager)this.getSystemService(ACTIVITY_SERVICE);
+	    List<RunningAppProcessInfo> processInfoList = 
+    		activityManager.getRunningAppProcesses();
+	    for(RunningAppProcessInfo processInfo : processInfoList){
+	    	if(processInfo.processName.equals("com.sample.iBeacon")) {
+	    		return processInfo.importance;
+	        }
+	    }
+	    
+	    return RunningAppProcessInfo.IMPORTANCE_EMPTY;
+		
+	}
+	
+	public class BeaconState {
+		int proximity, validations;
+		
+		BeaconState(){
+			this.proximity = IBeacon.PROXIMITY_UNKNOWN;
+			this.validations = 0;
+		}
+		
+		BeaconState(IBeacon iBeacon) {
+			this.proximity = iBeacon.getProximity();
+			this.validations = 0;
+		}
+	}
+	
+} 
